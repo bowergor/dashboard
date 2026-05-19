@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FinanceOS — Controle Financeiro</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html,body,#root{min-height:100vh}
+  body{background:#0f1117;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  input,select,button{font-family:inherit}
+  input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.6)}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:#0f1117}
+  ::-webkit-scrollbar-thumb{background:#2d3448;border-radius:3px}
+  table{border-collapse:separate;border-spacing:0 4px;width:100%}
+  thead th{text-align:left;font-size:11px;color:#475569;font-weight:600;padding:4px 12px;text-transform:uppercase;letter-spacing:.5px}
+  tbody tr{background:#1a1f2e}
+  tbody td{padding:10px 12px;font-size:13px;color:#94a3b8;border-top:1px solid #0f1117;border-bottom:1px solid #0f1117}
+  tbody td:first-child{border-left:1px solid #0f1117;border-radius:8px 0 0 8px}
+  tbody td:last-child{border-right:1px solid #0f1117;border-radius:0 8px 8px 0}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useMemo, useCallback } = React;
+
+/* ============================================================
+   FIREBASE CONFIG — descomente e insira suas chaves
+   ============================================================
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, getDocs, addDoc,
+         deleteDoc, doc, updateDoc } from "firebase/firestore";
+
+const firebaseConfig = {
+  apiKey:            "YOUR_API_KEY",
+  authDomain:        "YOUR_AUTH_DOMAIN",
+  projectId:         "YOUR_PROJECT_ID",
+  storageBucket:     "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId:             "YOUR_APP_ID",
+};
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+*/
+
+/* ============================================================
+   ÍCONES (Lucide via UMD)
+   ============================================================ */
+function Icon({ name, size = 16, color, style: s }) {
+  const el = React.useRef(null);
+  React.useEffect(() => {
+    if (el.current && window.lucide) {
+      el.current.innerHTML = "";
+      const ico = lucide.createIcons ? null : lucide[name];
+      if (ico) {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+        svg.setAttribute("width", size);
+        svg.setAttribute("height", size);
+        svg.setAttribute("viewBox","0 0 24 24");
+        svg.setAttribute("fill","none");
+        svg.setAttribute("stroke", color || "currentColor");
+        svg.setAttribute("stroke-width","2");
+        svg.setAttribute("stroke-linecap","round");
+        svg.setAttribute("stroke-linejoin","round");
+        svg.style.display = "inline-block";
+        svg.style.verticalAlign = "middle";
+        svg.style.flexShrink = "0";
+        const paths = lucide[name];
+        if (paths && paths[2]) {
+          paths[2].forEach(([tag, attrs]) => {
+            const el2 = document.createElementNS("http://www.w3.org/2000/svg", tag);
+            Object.entries(attrs).forEach(([k,v]) => el2.setAttribute(k,v));
+            svg.appendChild(el2);
+          });
+        }
+        el.current.appendChild(svg);
+      }
+    }
+  }, [name, size, color]);
+  return <span ref={el} style={{ display:"inline-flex", alignItems:"center", ...s }} />;
+}
+
+/* ============================================================
+   DADOS INICIAIS
+   ============================================================ */
+const NOW = new Date();
+const CY  = NOW.getFullYear();
+const CM  = NOW.getMonth(); // 0-indexed
+
+const D = (y, m, d) => new Date(y, m, d).toISOString().split("T")[0];
+
+const INIT_GASTOS = [
+  { id:"g1", data:D(CY,CM,3),  descricao:"Cosmopolita Coffeehouse",  valor:35,  categoria:"Cafeterias" },
+  { id:"g2", data:D(CY,CM,7),  descricao:"Riot Points (League)",      valor:50,  categoria:"Jogos/Steam" },
+  { id:"g3", data:D(CY,CM,12), descricao:"Headset HyperX Cloud II",   valor:250, categoria:"Hardware/Periféricos" },
+];
+
+const prevM = CM === 0 ? 11 : CM - 1;
+const prevY = CM === 0 ? CY - 1 : CY;
+
+const INIT_CARTOES = [
+  {
+    id:"c1", amigo:"Rafael", descricao:"Notebook Lenovo IdeaPad",
+    valorTotal:3500, parcelas:10,
+    anoInicio:prevY, mesInicio:prevM, // parcela 1 = mês passado → parcela 2 = mês atual
+    pagamentos:{},
+  },
+];
+
+const INIT_RATEIO = [
+  { id:"r1", descricao:"Conta de Luz",      valorTotal:150, mes:CM, ano:CY, titular:"eu",     status:"pendente" },
+  { id:"r2", descricao:"Internet 300 Mbps", valorTotal:100, mes:CM, ano:CY, titular:"colega", status:"pago"     },
+];
+
+/* ============================================================
+   CONSTANTES
+   ============================================================ */
+const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
+               "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+
+const CATEGORIAS = ["Cafeterias","Hardware/Periféricos","Jogos/Steam",
+                    "Mensalidades","Mercado","Transporte","Saúde","Outros"];
+
+const CAT_COLOR = {
+  "Cafeterias":"#f59e0b","Hardware/Periféricos":"#6366f1","Jogos/Steam":"#10b981",
+  "Mensalidades":"#3b82f6","Mercado":"#ec4899","Transporte":"#14b8a6",
+  "Saúde":"#f97316","Outros":"#8b5cf6",
+};
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+const fmt  = v => v.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+const pdate = s => { const [y,mo,d] = s.split("-").map(Number); return {year:y,month:mo-1,day:d}; };
+
+/* ============================================================
+   ESTILOS COMPARTILHADOS
+   ============================================================ */
+const INPUT = {
+  width:"100%", background:"#0f1117", border:"1px solid #2d3448", borderRadius:8,
+  color:"#e2e8f0", padding:"7px 10px", fontSize:13, outline:"none",
+};
+const BTN = {
+  background:"#1e1f3a", border:"1px solid #312e81", color:"#a5b4fc",
+  borderRadius:8, padding:"7px 14px", fontSize:13, fontWeight:600,
+  cursor:"pointer", display:"inline-flex", alignItems:"center", gap:6,
+};
+
+/* ============================================================
+   COMPONENTES BASE
+   ============================================================ */
+function Card({ title, children }) {
+  return (
+    <div style={{background:"#1a1f2e",border:"1px solid #1e2435",borderRadius:12,padding:18}}>
+      {title && <div style={{fontSize:11,fontWeight:700,color:"#6366f1",marginBottom:14,textTransform:"uppercase",letterSpacing:".6px"}}>{title}</div>}
+      {children}
+    </div>
+  );
+}
+
+function StatCard({ label, value, sub, accent }) {
+  const A = { indigo:{bg:"#1e1f3a",bdr:"#312e81",txt:"#a5b4fc"}, green:{bg:"#0f2b1f",bdr:"#14532d",txt:"#4ade80"}, amber:{bg:"#2b1d0f",bdr:"#78350f",txt:"#fcd34d"}, red:{bg:"#2b0f0f",bdr:"#7f1d1d",txt:"#f87171"} };
+  const c = A[accent] || A.indigo;
+  return (
+    <div style={{background:c.bg,border:`1px solid ${c.bdr}`,borderRadius:12,padding:"16px 18px"}}>
+      <div style={{fontSize:11,color:"#64748b",fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",marginBottom:8}}>{label}</div>
+      <div style={{fontSize:22,fontWeight:700,color:c.txt,letterSpacing:"-.5px"}}>{value}</div>
+      {sub && <div style={{fontSize:11,color:"#475569",marginTop:4}}>{sub}</div>}
+    </div>
+  );
+}
+
+function FormField({ label, children }) {
+  return (
+    <div>
+      <label style={{display:"block",fontSize:11,color:"#64748b",fontWeight:600,marginBottom:5,textTransform:"uppercase",letterSpacing:".5px"}}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function Empty({ msg }) {
+  return (
+    <div style={{textAlign:"center",padding:"36px 0",color:"#475569"}}>
+      <div style={{fontSize:28,marginBottom:8,opacity:.3}}>📭</div>
+      <div style={{fontSize:13}}>{msg}</div>
+    </div>
+  );
+}
+
+function Badge({ text, color }) {
+  return <span style={{background:`${color}22`,color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{text}</span>;
+}
+
+function StatusBtn({ pago, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      display:"inline-flex",alignItems:"center",gap:5,
+      border:`1px solid ${pago?"#14532d":"#78350f"}`,
+      background:pago?"#0f2b1f":"#2b1d0f",
+      color:pago?"#4ade80":"#fbbf24",
+      borderRadius:8,padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",
+    }}>
+      {pago ? "✓ Pago" : "⏳ Pendente"}
+    </button>
+  );
+}
+
+function FlowRow({ label, value, type }) {
+  const C = { out:"#f87171", in:"#4ade80", pending:"#fbbf24", warn:"#fb923c" };
+  const col = C[type] || C.pending;
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid #1e2435"}}>
+      <span style={{fontSize:12,color:"#94a3b8",flex:1}}>{label}</span>
+      <span style={{fontSize:13,fontWeight:700,color:col}}>{fmt(value)}</span>
+    </div>
+  );
+}
+
+/* ============================================================
+   FILTRO SELECT
+   ============================================================ */
+function FilterSelect({ value, onChange, options }) {
+  return (
+    <div style={{position:"relative"}}>
+      <select value={value} onChange={e=>onChange(Number(e.target.value))} style={{
+        appearance:"none",background:"#1e2435",border:"1px solid #2d3448",
+        color:"#e2e8f0",padding:"7px 30px 7px 12px",borderRadius:8,fontSize:13,cursor:"pointer",outline:"none",
+      }}>
+        {options.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+      </select>
+      <span style={{position:"absolute",right:9,top:"50%",transform:"translateY(-50%)",color:"#64748b",fontSize:10,pointerEvents:"none"}}>▼</span>
+    </div>
+  );
+}
+
+/* ============================================================
+   ABA: VISÃO GERAL
+   ============================================================ */
+function OverviewTab({ totalGasto, aReceber, aPagar, receitaRecebida, gastosPorCategoria, gastosMes, parcelasMes, rateioMes, fMes, fAno }) {
+  const maxCat = gastosPorCategoria.length ? gastosPorCategoria[0].val : 1;
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:24}}>
+        <StatCard label="Total Gasto"  value={fmt(totalGasto)}       sub="pessoal + apê + parcelas" accent="red" />
+        <StatCard label="A Receber"    value={fmt(aReceber)}          sub="parcelas + rateio pendentes" accent="green" />
+        <StatCard label="A Pagar"      value={fmt(aPagar)}            sub="minha parte das contas" accent="amber" />
+        <StatCard label="Já Recebi"    value={fmt(receitaRecebida)}   sub="entrou no seu bolso" accent="indigo" />
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <Card title="Gastos por Categoria">
+          {gastosPorCategoria.length === 0
+            ? <Empty msg="Nenhum gasto pessoal neste mês" />
+            : gastosPorCategoria.map(({cat,val}) => (
+              <div key={cat} style={{marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                  <span style={{fontSize:12,color:"#94a3b8"}}>{cat}</span>
+                  <span style={{fontSize:12,fontWeight:700,color:"#e2e8f0"}}>{fmt(val)}</span>
+                </div>
+                <div style={{height:6,borderRadius:4,background:"#0f1117"}}>
+                  <div style={{height:6,borderRadius:4,background:CAT_COLOR[cat]||"#6366f1",width:`${(val/maxCat)*100}%`,transition:"width .3s"}} />
+                </div>
+              </div>
+            ))
+          }
+        </Card>
+
+        <Card title="Fluxo do Mês">
+          {gastosMes.length === 0 && parcelasMes.length === 0 && rateioMes.length === 0
+            ? <Empty msg="Nenhuma movimentação" />
+            : <>
+              {gastosMes.length > 0 && <FlowRow label={`Gastos pessoais (${gastosMes.length} itens)`} value={gastosMes.reduce((s,g)=>s+g.valor,0)} type="out" />}
+              {parcelasMes.filter(p=>p.pago).map(p=>(
+                <FlowRow key={p.id+p.numParcela} label={`Parcela ${p.numParcela}/${p.parcelas} — ${p.amigo} (pago)`} value={p.valorParcela} type="out" />
+              ))}
+              {parcelasMes.filter(p=>!p.pago).map(p=>(
+                <FlowRow key={p.id+p.numParcela} label={`A receber: ${p.amigo} (${p.numParcela}/${p.parcelas})`} value={p.valorParcela} type="pending" />
+              ))}
+              {rateioMes.map(r=>{
+                const t = r.titular==="eu" ? (r.status==="pago"?"in":"pending") : (r.status==="pago"?"out":"warn");
+                return <FlowRow key={r.id} label={`${r.descricao} — ${r.titular==="eu"?"receber do colega":"minha parte"}`} value={r.valorTotal/2} type={t} />;
+              })}
+            </>
+          }
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   ABA: MEUS GASTOS
+   ============================================================ */
+function GastosTab({ gastosMes, filterMes, filterAno, onAdd, onDelete, total }) {
+  const hoje = new Date(filterAno, filterMes, Math.min(new Date().getDate(), new Date(filterAno, filterMes+1, 0).getDate())).toISOString().split("T")[0];
+  const [form, setForm] = useState({ data:hoje, descricao:"", valor:"", categoria:"Cafeterias" });
+  const [busy, setBusy] = useState(false);
+
+  const upd = k => e => setForm(f=>({...f,[k]:e.target.value}));
+
+  const add = async () => {
+    if (!form.descricao.trim() || !form.valor) return;
+    setBusy(true);
+    await new Promise(r=>setTimeout(r,150));
+    onAdd({...form, valor:parseFloat(form.valor)});
+    setForm(f=>({...f, descricao:"", valor:""}));
+    setBusy(false);
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+        <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9"}}>{MESES[filterMes]} {filterAno}</div>
+        <div style={{background:"#2b0f0f",border:"1px solid #7f1d1d",borderRadius:8,padding:"4px 14px",fontSize:14,fontWeight:700,color:"#f87171"}}>{fmt(total)}</div>
+      </div>
+
+      {/* FORM */}
+      <div style={{background:"#1a1f2e",border:"1px solid #1e2435",borderRadius:12,padding:18,marginBottom:20}}>
+        <div style={{fontSize:11,fontWeight:700,color:"#6366f1",marginBottom:14,textTransform:"uppercase",letterSpacing:".6px"}}>Novo Gasto</div>
+        <div style={{display:"grid",gridTemplateColumns:"140px 1fr 120px 1fr 90px",gap:10,alignItems:"end"}}>
+          <FormField label="Data"><input type="date" value={form.data} onChange={upd("data")} style={INPUT} /></FormField>
+          <FormField label="Descrição"><input type="text" value={form.descricao} onChange={upd("descricao")} placeholder="Ex: Almoço" style={INPUT} /></FormField>
+          <FormField label="Valor R$"><input type="number" value={form.valor} onChange={upd("valor")} placeholder="0,00" min="0" step="0.01" style={INPUT} /></FormField>
+          <FormField label="Categoria">
+            <select value={form.categoria} onChange={upd("categoria")} style={INPUT}>
+              {CATEGORIAS.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </FormField>
+          <button onClick={add} disabled={busy} style={{...BTN,height:36,justifyContent:"center"}}>
+            {busy ? "..." : "+ Add"}
+          </button>
+        </div>
+      </div>
+
+      {gastosMes.length === 0
+        ? <Empty msg="Nenhum gasto registrado neste mês" />
+        : <table>
+          <thead><tr>
+            <th>Data</th><th>Descrição</th><th>Categoria</th><th style={{textAlign:"right"}}>Valor</th><th></th>
+          </tr></thead>
+          <tbody>
+            {gastosMes.map(g=>(
+              <tr key={g.id}>
+                <td style={{whiteSpace:"nowrap"}}>{g.data.split("-").reverse().join("/")}</td>
+                <td style={{fontWeight:500,color:"#e2e8f0"}}>{g.descricao}</td>
+                <td><Badge text={g.categoria} color={CAT_COLOR[g.categoria]||"#6366f1"} /></td>
+                <td style={{textAlign:"right",fontWeight:700,color:"#f87171"}}>{fmt(g.valor)}</td>
+                <td style={{textAlign:"center"}}>
+                  <button onClick={()=>onDelete(g.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#475569",padding:4,borderRadius:6,fontSize:16}} title="Excluir">🗑</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      }
+    </div>
+  );
+}
+
+/* ============================================================
+   ABA: CARTÃO EMPRESTADO
+   ============================================================ */
+function CartaoTab({ cartoes, parcelasMes, filterMes, filterAno, onToggle, onAdd, onDelete }) {
+  const [show, setShow] = useState(false);
+  const [form, setForm] = useState({ amigo:"", descricao:"", valorTotal:"", parcelas:"12", dataCompra: new Date(filterAno,filterMes,1).toISOString().split("T")[0] });
+  const upd = k => e => setForm(f=>({...f,[k]:e.target.value}));
+
+  const add = () => {
+    if (!form.amigo.trim() || !form.descricao.trim() || !form.valorTotal) return;
+    const d = pdate(form.dataCompra);
+    onAdd({ amigo:form.amigo, descricao:form.descricao, valorTotal:parseFloat(form.valorTotal), parcelas:parseInt(form.parcelas), anoInicio:d.year, mesInicio:d.month, pagamentos:{} });
+    setForm({amigo:"",descricao:"",valorTotal:"",parcelas:"12",dataCompra:form.dataCompra});
+    setShow(false);
+  };
+
+  const totalPago    = parcelasMes.filter(p=>p.pago ).reduce((s,p)=>s+p.valorParcela,0);
+  const totalPending = parcelasMes.filter(p=>!p.pago).reduce((s,p)=>s+p.valorParcela,0);
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9"}}>Fatura — {MESES[filterMes]} {filterAno}</div>
+          <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Apenas as parcelas que vencem neste mês</div>
+        </div>
+        <button onClick={()=>setShow(s=>!s)} style={BTN}>{show ? "✕ Cancelar" : "+ Novo Empréstimo"}</button>
+      </div>
+
+      {show && (
+        <div style={{background:"#1a1f2e",border:"1px solid #1e2435",borderRadius:12,padding:18,marginBottom:20}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 130px 100px 160px",gap:10,alignItems:"end"}}>
+            <FormField label="Nome do Amigo"><input type="text" value={form.amigo} onChange={upd("amigo")} placeholder="Ex: Rafael" style={INPUT} /></FormField>
+            <FormField label="Produto / Serviço"><input type="text" value={form.descricao} onChange={upd("descricao")} placeholder="Ex: Notebook" style={INPUT} /></FormField>
+            <FormField label="Valor Total R$"><input type="number" value={form.valorTotal} onChange={upd("valorTotal")} placeholder="0" min="0" style={INPUT} /></FormField>
+            <FormField label="Parcelas"><input type="number" value={form.parcelas} onChange={upd("parcelas")} min="1" max="60" style={INPUT} /></FormField>
+            <FormField label="Data da Compra"><input type="date" value={form.dataCompra} onChange={upd("dataCompra")} style={INPUT} /></FormField>
+          </div>
+          <div style={{marginTop:12,display:"flex",gap:8}}>
+            <button onClick={add} style={BTN}>💾 Salvar</button>
+            <div style={{fontSize:12,color:"#64748b",display:"flex",alignItems:"center"}}>A 1ª parcela vence no mês da compra</div>
+          </div>
+        </div>
+      )}
+
+      {parcelasMes.length === 0
+        ? <Empty msg={`Nenhuma parcela a receber em ${MESES[filterMes]}/${filterAno}`} />
+        : <>
+          <table>
+            <thead><tr>
+              <th>Amigo</th><th>Produto</th><th>Parcela</th><th>Valor Parcela</th><th>Total</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody>
+              {parcelasMes.map(p=>(
+                <tr key={p.id+p.numParcela}>
+                  <td style={{fontWeight:700,color:"#a5b4fc"}}>{p.amigo}</td>
+                  <td style={{color:"#e2e8f0"}}>{p.descricao}</td>
+                  <td><span style={{fontWeight:600,color:"#64748b"}}>{p.numParcela}</span><span style={{color:"#475569"}}>/{p.parcelas}</span></td>
+                  <td style={{fontWeight:700,color:p.pago?"#4ade80":"#fbbf24"}}>{fmt(p.valorParcela)}</td>
+                  <td style={{color:"#64748b"}}>{fmt(p.valorTotal)}</td>
+                  <td><StatusBtn pago={p.pago} onClick={()=>onToggle(p.id,p.numParcela,p.pago)} /></td>
+                  <td><button onClick={()=>onDelete(p.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#475569",fontSize:16}} title="Excluir">🗑</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{display:"flex",justifyContent:"flex-end",gap:20,marginTop:12,padding:"10px 14px",background:"#1a1f2e",borderRadius:10,fontSize:13}}>
+            <span style={{color:"#4ade80"}}>✓ Pago: <b>{fmt(totalPago)}</b></span>
+            <span style={{color:"#fbbf24"}}>⏳ Pendente: <b>{fmt(totalPending)}</b></span>
+          </div>
+        </>
+      }
+    </div>
+  );
+}
+
+/* ============================================================
+   ABA: RATEIO DO APÊ
+   ============================================================ */
+function RateioTab({ rateioMes, filterMes, filterAno, onToggle, onAdd, onDelete, aReceber, aPagar, gastoMeu }) {
+  const [show, setShow] = useState(false);
+  const [form, setForm] = useState({ descricao:"", valorTotal:"", titular:"eu" });
+  const upd = k => e => setForm(f=>({...f,[k]:e.target.value}));
+
+  const add = () => {
+    if (!form.descricao.trim() || !form.valorTotal) return;
+    onAdd({ descricao:form.descricao, valorTotal:parseFloat(form.valorTotal), titular:form.titular, mes:filterMes, ano:filterAno, status:"pendente" });
+    setForm({descricao:"",valorTotal:"",titular:"eu"});
+    setShow(false);
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9"}}>Rateio do Apê — {MESES[filterMes]} {filterAno}</div>
+          <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Divisão 50/50 das contas compartilhadas</div>
+        </div>
+        <button onClick={()=>setShow(s=>!s)} style={BTN}>{show ? "✕ Cancelar" : "+ Nova Conta"}</button>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
+        <StatCard label="A Receber do Colega" value={fmt(aReceber)} sub="contas no seu nome pendentes" accent="green" />
+        <StatCard label="Ainda Devo Pagar"    value={fmt(aPagar)}   sub="contas do colega pendentes" accent="amber" />
+        <StatCard label="Já Paguei (minha parte)" value={fmt(gastoMeu)} sub="contas do colega quitadas" accent="indigo" />
+      </div>
+
+      {show && (
+        <div style={{background:"#1a1f2e",border:"1px solid #1e2435",borderRadius:12,padding:18,marginBottom:20}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 150px 200px auto",gap:10,alignItems:"end"}}>
+            <FormField label="Descrição"><input type="text" value={form.descricao} onChange={upd("descricao")} placeholder="Ex: Conta de Água" style={INPUT} /></FormField>
+            <FormField label="Valor Total R$"><input type="number" value={form.valorTotal} onChange={upd("valorTotal")} placeholder="0" min="0" style={INPUT} /></FormField>
+            <FormField label="Quem é o titular?">
+              <select value={form.titular} onChange={upd("titular")} style={INPUT}>
+                <option value="eu">Eu (colega me paga metade)</option>
+                <option value="colega">Colega (eu pago metade)</option>
+              </select>
+            </FormField>
+            <button onClick={add} style={{...BTN,height:36,justifyContent:"center"}}>+ Add</button>
+          </div>
+        </div>
+      )}
+
+      {rateioMes.length === 0
+        ? <Empty msg={`Nenhuma conta de rateio em ${MESES[filterMes]}/${filterAno}`} />
+        : <table>
+          <thead><tr>
+            <th>Descrição</th><th>Total</th><th>Minha Parte</th><th>Titular</th><th>Situação</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>
+            {rateioMes.map(r => {
+              const mp  = r.valorTotal / 2;
+              const meuTit = r.titular === "eu";
+              const pago   = r.status  === "pago";
+              const sit  = meuTit
+                ? (pago ? "✅ Colega pagou" : "⏳ Aguardando colega")
+                : (pago ? "✅ Você pagou"   : "❗ Você deve pagar");
+              const sitColor = pago ? "#4ade80" : meuTit ? "#fbbf24" : "#f87171";
+              return (
+                <tr key={r.id}>
+                  <td style={{fontWeight:500,color:"#e2e8f0"}}>{r.descricao}</td>
+                  <td>{fmt(r.valorTotal)}</td>
+                  <td style={{fontWeight:700,color:"#a5b4fc"}}>{fmt(mp)}</td>
+                  <td>
+                    <span style={{
+                      background:meuTit?"#1e1f3a":"#0c1f30",
+                      color:meuTit?"#a5b4fc":"#7dd3fc",
+                      borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700,
+                    }}>{meuTit ? "Eu" : "Colega"}</span>
+                  </td>
+                  <td style={{fontSize:12,color:sitColor,fontWeight:500}}>{sit}</td>
+                  <td><StatusBtn pago={pago} onClick={()=>onToggle(r.id)} /></td>
+                  <td><button onClick={()=>onDelete(r.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#475569",fontSize:16}} title="Excluir">🗑</button></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      }
+    </div>
+  );
+}
+
+/* ============================================================
+   APP PRINCIPAL
+   ============================================================ */
+function App() {
+  const [tab,    setTab]    = useState("overview");
+  const [fMes,   setFMes]   = useState(CM);
+  const [fAno,   setFAno]   = useState(CY);
+  const [gastos,  setGastos]  = useState(INIT_GASTOS);
+  const [cartoes, setCartoes] = useState(INIT_CARTOES);
+  const [rateio,  setRateio]  = useState(INIT_RATEIO);
+
+  /* ── gastos do mês ── */
+  const gastosMes = useMemo(()=>gastos.filter(g=>{
+    const {year,month}=pdate(g.data); return year===fAno && month===fMes;
+  }),[gastos,fMes,fAno]);
+
+  const totalGastosPessoais = useMemo(()=>gastosMes.reduce((s,g)=>s+g.valor,0),[gastosMes]);
+
+  /* ── parcelas do mês ── */
+  const parcelasMes = useMemo(()=>{
+    const res=[];
+    cartoes.forEach(c=>{
+      const diff = (fAno - c.anoInicio)*12 + (fMes - c.mesInicio);
+      const num  = diff + 1;
+      if (num >= 1 && num <= c.parcelas) {
+        res.push({...c, numParcela:num, valorParcela:c.valorTotal/c.parcelas, pago:c.pagamentos[num]===true});
+      }
+    });
+    return res;
+  },[cartoes,fMes,fAno]);
+
+  const totalPagas    = useMemo(()=>parcelasMes.filter(p=>p.pago ).reduce((s,p)=>s+p.valorParcela,0),[parcelasMes]);
+  const totalPendentes= useMemo(()=>parcelasMes.filter(p=>!p.pago).reduce((s,p)=>s+p.valorParcela,0),[parcelasMes]);
+
+  /* ── rateio do mês ── */
+  const rateioMes = useMemo(()=>rateio.filter(r=>r.mes===fMes && r.ano===fAno),[rateio,fMes,fAno]);
+
+  const aReceber   = useMemo(()=>rateioMes.filter(r=>r.titular==="eu"    && r.status==="pendente").reduce((s,r)=>s+r.valorTotal/2,0),[rateioMes]);
+  const aPagar     = useMemo(()=>rateioMes.filter(r=>r.titular==="colega" && r.status==="pendente").reduce((s,r)=>s+r.valorTotal/2,0),[rateioMes]);
+  const gastoMeu   = useMemo(()=>rateioMes.filter(r=>r.titular==="colega" && r.status==="pago"   ).reduce((s,r)=>s+r.valorTotal/2,0),[rateioMes]);
+
+  /* ── totais visão geral ── */
+  const totalGasto       = totalGastosPessoais + totalPagas + gastoMeu;
+  const aReceberTotal    = aReceber + totalPendentes;
+  const receitaRecebida  = rateioMes.filter(r=>r.titular==="eu"&&r.status==="pago").reduce((s,r)=>s+r.valorTotal/2,0) + totalPagas;
+
+  /* ── gastos por categoria ── */
+  const gastosPorCategoria = useMemo(()=>{
+    const m={};
+    gastosMes.forEach(g=>{m[g.categoria]=(m[g.categoria]||0)+g.valor;});
+    return Object.entries(m).map(([cat,val])=>({cat,val})).sort((a,b)=>b.val-a.val);
+  },[gastosMes]);
+
+  /* ── actions ── */
+  const toggleParcela = useCallback((cartaoId,num,pago)=>{
+    setCartoes(p=>p.map(c=>c.id!==cartaoId?c:{...c,pagamentos:{...c.pagamentos,[num]:!pago}}));
+  },[]);
+  const toggleRateio  = useCallback(id=>{
+    setRateio(p=>p.map(r=>r.id!==id?r:{...r,status:r.status==="pago"?"pendente":"pago"}));
+  },[]);
+  const addGasto      = useCallback(g=>{setGastos(p=>[...p,{...g,id:`g${Date.now()}`}]);},[]);
+  const delGasto      = useCallback(id=>{setGastos(p=>p.filter(g=>g.id!==id));},[]);
+  const addCartao     = useCallback(c=>{setCartoes(p=>[...p,{...c,id:`c${Date.now()}`}]);},[]);
+  const delCartao     = useCallback(id=>{setCartoes(p=>p.filter(c=>c.id!==id));},[]);
+  const addRateio     = useCallback(r=>{setRateio(p=>[...p,{...r,id:`r${Date.now()}`}]);},[]);
+  const delRateio     = useCallback(id=>{setRateio(p=>p.filter(r=>r.id!==id));},[]);
+
+  const TABS = [
+    {id:"overview", label:"Visão Geral",        emoji:"📊"},
+    {id:"gastos",   label:"Meus Gastos",         emoji:"🧾"},
+    {id:"cartao",   label:"Cartão Emprestado",   emoji:"💳"},
+    {id:"rateio",   label:"Rateio do Apê",       emoji:"🏠"},
+  ];
+
+  return (
+    <div style={{minHeight:"100vh",background:"#0f1117"}}>
+      {/* ── HEADER ── */}
+      <div style={{background:"linear-gradient(135deg,#1a1f2e,#151922)",borderBottom:"1px solid #1e2435",padding:"18px 24px 0"}}>
+        <div style={{maxWidth:1000,margin:"0 auto"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+            {/* LOGO */}
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:38,height:38,borderRadius:10,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>💰</div>
+              <div>
+                <div style={{fontSize:17,fontWeight:800,color:"#f1f5f9",letterSpacing:"-.3px"}}>FinanceOS</div>
+                <div style={{fontSize:11,color:"#64748b"}}>Controle Financeiro Pessoal</div>
+              </div>
+            </div>
+            {/* FILTRO UNIVERSAL */}
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:12,color:"#475569",marginRight:4}}>Filtro:</span>
+              <FilterSelect value={fMes} onChange={setFMes} options={MESES.map((l,v)=>({v,l}))} />
+              <FilterSelect value={fAno} onChange={setFAno} options={[CY-1,CY,CY+1].map(y=>({v:y,l:String(y)}))} />
+            </div>
+          </div>
+          {/* TABS */}
+          <div style={{display:"flex",gap:2}}>
+            {TABS.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{
+                display:"flex",alignItems:"center",gap:7,padding:"9px 16px",
+                borderRadius:"8px 8px 0 0",border:"none",cursor:"pointer",
+                background:tab===t.id?"#0f1117":"transparent",
+                color:tab===t.id?"#818cf8":"#64748b",
+                fontWeight:tab===t.id?700:400,fontSize:13,
+                borderTop:tab===t.id?"2px solid #6366f1":"2px solid transparent",
+                transition:"all .15s",
+              }}>
+                {t.emoji} {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── CONTENT ── */}
+      <div style={{maxWidth:1000,margin:"0 auto",padding:"28px 24px"}}>
+        {tab==="overview" &&
+          <OverviewTab totalGasto={totalGasto} aReceber={aReceberTotal} aPagar={aPagar}
+            receitaRecebida={receitaRecebida} gastosPorCategoria={gastosPorCategoria}
+            gastosMes={gastosMes} parcelasMes={parcelasMes} rateioMes={rateioMes}
+            fMes={fMes} fAno={fAno} />}
+        {tab==="gastos" &&
+          <GastosTab gastosMes={gastosMes} filterMes={fMes} filterAno={fAno}
+            onAdd={addGasto} onDelete={delGasto} total={totalGastosPessoais} />}
+        {tab==="cartao" &&
+          <CartaoTab cartoes={cartoes} parcelasMes={parcelasMes} filterMes={fMes} filterAno={fAno}
+            onToggle={toggleParcela} onAdd={addCartao} onDelete={delCartao} />}
+        {tab==="rateio" &&
+          <RateioTab rateioMes={rateioMes} filterMes={fMes} filterAno={fAno}
+            onToggle={toggleRateio} onAdd={addRateio} onDelete={delRateio}
+            aReceber={aReceber} aPagar={aPagar} gastoMeu={gastoMeu} />}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
