@@ -45,50 +45,104 @@ tbody td:last-child{border-right:1px solid var(--bg);border-radius:0 var(--r2) v
 #toast{position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 .toast-item{background:var(--bg3);border:1px solid var(--border2);border-left:3px solid var(--accent);color:var(--text);padding:10px 16px;border-radius:var(--r2);font-size:13px;font-weight:500;animation:fadeUp .25s ease;pointer-events:none}
 .spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite}
+#loading-screen{display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px}
+#loading-status{font-size:13px;color:var(--muted);font-family:'Syne',sans-serif;margin-top:4px}
 </style>
 </head>
 <body>
 <div id="root">
-  <div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px">
+  <div id="loading-screen">
     <div class="spinner"></div>
     <div style="font-size:14px;color:var(--muted);font-family:'Syne',sans-serif">Conectando ao Firebase…</div>
+    <div id="loading-status"></div>
   </div>
 </div>
 <div id="toast"></div>
 
-<script type="module">
-/* ══ IMPORTS ══ */
-import { initializeApp }   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, collection, doc, getDocs, addDoc, deleteDoc, updateDoc, serverTimestamp }
-                           from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, signInAnonymously, onAuthStateChanged }
-                           from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+<script>
+/* ── helper para atualizar o status de loading ── */
+function setStatus(msg){ 
+  const el = document.getElementById("loading-status");
+  if(el) el.textContent = msg;
+}
+function showFatalError(msg){
+  document.getElementById("root").innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px;padding:32px;text-align:center">
+      <div style="font-size:40px">🔥</div>
+      <div style="font-size:18px;font-weight:700;color:var(--red);font-family:var(--font-head)">Erro ao conectar</div>
+      <div style="font-size:13px;color:var(--muted);max-width:520px;line-height:1.7">${msg}</div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px 20px;font-size:12px;font-family:var(--font-mono);color:var(--muted2);text-align:left;max-width:580px">
+        <div style="color:var(--amber);margin-bottom:8px;font-weight:600">💡 Passos para resolver:</div>
+        <div style="line-height:1.9">
+          1. Firebase Console → Authentication → Sign-in method → Ativar <b>Anônimo</b><br>
+          2. Firebase Console → Firestore → Regras → Publicar:<br>
+          <pre style="margin-top:6px;color:var(--cyan);font-size:11px">rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    match /{doc=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}</pre>
+        </div>
+      </div>
+      <button onclick="location.reload()" style="margin-top:8px;background:var(--accent);border:none;color:#fff;border-radius:var(--r2);padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer">Tentar novamente</button>
+    </div>`;
+}
+</script>
 
-const R  = await import("https://esm.sh/react@18");
-const RD = await import("https://esm.sh/react-dom@18/client");
-const { useState, useEffect, useMemo, useCallback, useRef } = R;
+<!-- Firebase v9 (única versão disponível como módulo ES no gstatic) -->
+<script type="module">
+/* ══════════ 1. IMPORTS FIREBASE v9 ══════════ */
+setStatus("carregando Firebase SDK…");
+let initializeApp, getFirestore, collection, doc, getDocs, addDoc, deleteDoc, updateDoc, serverTimestamp;
+let getAuth, signInAnonymously, onAuthStateChanged;
+
+try {
+  ({ initializeApp } = await import("https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js"));
+  ({ getFirestore, collection, doc, getDocs, addDoc, deleteDoc, updateDoc, serverTimestamp } =
+      await import("https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js"));
+  ({ getAuth, signInAnonymously, onAuthStateChanged } =
+      await import("https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js"));
+} catch(e) {
+  showFatalError("Falha ao carregar o Firebase SDK.<br>Verifique sua conexão com a internet.<br><small>" + e.message + "</small>");
+  throw e;
+}
+
+/* ══════════ 2. IMPORTS REACT ══════════ */
+setStatus("carregando React…");
+let R, RD;
+try {
+  R  = await import("https://esm.sh/react@18");
+  RD = await import("https://esm.sh/react-dom@18/client");
+} catch(e) {
+  showFatalError("Falha ao carregar React.<br>Verifique sua conexão com a internet.<br><small>" + e.message + "</small>");
+  throw e;
+}
+const { useState, useEffect, useMemo, useCallback } = R;
 const h = R.default.createElement;
 
-/* ══ FIREBASE ══ */
-const firebaseConfig = {
-  apiKey:"AIzaSyC6YgEHAmNJO2WV_6C-p7WEP4RgftDBflI",
-  authDomain:"dashboardb-5fef9.firebaseapp.com",
-  projectId:"dashboardb-5fef9",
-  storageBucket:"dashboardb-5fef9.firebasestorage.app",
-  messagingSenderId:"501258050014",
-  appId:"1:501258050014:web:2eda576283dd72e3dc254f"
-};
-const app  = initializeApp(firebaseConfig);
+/* ══════════ 3. FIREBASE INIT ══════════ */
+setStatus("inicializando app…");
+const app = initializeApp({
+  apiKey:            "AIzaSyC6YgEHAmNJO2WV_6C-p7WEP4RgftDBflI",
+  authDomain:        "dashboardb-5fef9.firebaseapp.com",
+  projectId:         "dashboardb-5fef9",
+  storageBucket:     "dashboardb-5fef9.firebasestorage.app",
+  messagingSenderId: "501258050014",
+  appId:             "1:501258050014:web:2eda576283dd72e3dc254f"
+});
 const db   = getFirestore(app);
 const auth = getAuth(app);
 
-const col    = n => collection(db, n);
+/* ══════════ 4. FIRESTORE HELPERS ══════════ */
+const col    = n    => collection(db, n);
 const getAll = async n => { const s = await getDocs(col(n)); return s.docs.map(d=>({id:d.id,...d.data()})); };
 const fadd   = (n,d)    => addDoc(col(n), {...d, _ts:serverTimestamp()});
 const fdel   = (n,id)   => deleteDoc(doc(db,n,id));
 const fpatch = (n,id,d) => updateDoc(doc(db,n,id), d);
 
-/* ══ CONSTANTS ══ */
+/* ══════════ 5. CONSTANTS ══════════ */
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const CATS  = ["Cafeterias","Hardware/Periféricos","Jogos/Steam","Mensalidades","Mercado","Transporte","Saúde","Outros"];
 const C_CLR = {"Cafeterias":"#fbbf24","Hardware/Periféricos":"#4f8eff","Jogos/Steam":"#34d399","Mensalidades":"#22d3ee","Mercado":"#f472b6","Transporte":"#34d399","Saúde":"#f97316","Outros":"#a78bfa"};
@@ -98,7 +152,7 @@ const fmtN  = v => Number(v||0).toLocaleString("pt-BR",{minimumFractionDigits:2,
 const pdate = s => { const [y,mo]=s.split("-").map(Number); return {year:y,month:mo-1}; };
 const D     = (y,m,d) => new Date(y,m,d).toISOString().split("T")[0];
 
-/* ══ TOAST ══ */
+/* ══════════ TOAST ══════════ */
 function showToast(msg, type="info"){
   const el = document.createElement("div");
   el.className = "toast-item";
@@ -109,9 +163,8 @@ function showToast(msg, type="info"){
   setTimeout(()=>el.remove(), 3000);
 }
 
-/* ══ BASE UI COMPONENTS ══ */
+/* ══════════ BASE UI ══════════ */
 const INP = {width:"100%",background:"var(--bg1)",border:"1px solid var(--border)",borderRadius:"var(--r2)",color:"var(--text)",padding:"8px 11px",fontSize:13,outline:"none",transition:"border-color .15s",fontFamily:"var(--font-body)"};
-
 function Input(props){
   const [foc,setFoc] = useState(false);
   return h("input",{...props,style:{...INP,...(foc?{borderColor:"var(--accent)"}:{}),...(props.style||{})},onFocus:()=>setFoc(true),onBlur:()=>setFoc(false)});
@@ -219,43 +272,35 @@ function Donut({data,size=110}){
   );
 }
 
-/* ════════════ ABA 0 — SALDO EM CONTA ════════════ */
+/* ════════════ ABA 0 — SALDO ════════════ */
 function SaldoTab({gastosMes,parcelasMes,rateioMes,comprasMes,fMes,fAno,saldos,onAddSaldo,onDelSaldo,onAddMov,onDelMov,movimentos}){
   const [showAddConta,setShowAddConta] = useState(false);
   const [showAddMov,setShowAddMov]     = useState(false);
   const [fConta,setFConta] = useState({nome:"",banco:"",tipo:"corrente",saldoInicial:""});
   const [fMov,setFMov]     = useState({contaId:"",tipo:"entrada",descricao:"",valor:"",data:D(CY,CM,NOW.getDate())});
-
   const totalSaldo = saldos.reduce((s,c)=>s+Number(c.saldoAtual||0),0);
   const movMes     = movimentos.filter(m=>{const d=pdate(m.data);return d.year===fAno&&d.month===fMes});
   const entradas   = movMes.filter(m=>m.tipo==="entrada").reduce((s,m)=>s+Number(m.valor||0),0);
   const saidas     = movMes.filter(m=>m.tipo==="saida").reduce((s,m)=>s+Number(m.valor||0),0);
-
   const totalGastosMes = gastosMes.reduce((s,g)=>s+Number(g.valor||0),0)
     + comprasMes.reduce((s,p)=>s+Number(p.valorParcela||0),0)
     + parcelasMes.filter(p=>p.pago).reduce((s,p)=>s+Number(p.valorParcela||0),0)
     + rateioMes.filter(r=>r.titular==="colega"&&r.status==="pago").reduce((s,r)=>s+Number(r.valorTotal||0)/2,0);
   const totalAReceber = parcelasMes.filter(p=>!p.pago).reduce((s,p)=>s+Number(p.valorParcela||0),0)
     + rateioMes.filter(r=>r.titular==="eu"&&r.status==="pendente").reduce((s,r)=>s+Number(r.valorTotal||0)/2,0);
-
   const addConta = async()=>{
     if(!fConta.nome||!fConta.saldoInicial) return;
     const c={nome:fConta.nome,banco:fConta.banco,tipo:fConta.tipo,saldoInicial:parseFloat(fConta.saldoInicial),saldoAtual:parseFloat(fConta.saldoInicial)};
-    await onAddSaldo(c);
-    setFConta({nome:"",banco:"",tipo:"corrente",saldoInicial:""});
-    setShowAddConta(false);
+    await onAddSaldo(c); setFConta({nome:"",banco:"",tipo:"corrente",saldoInicial:""}); setShowAddConta(false);
   };
   const addMov = async()=>{
     if(!fMov.contaId||!fMov.descricao||!fMov.valor) return;
     await onAddMov({...fMov,valor:parseFloat(fMov.valor)});
-    setFMov(f=>({...f,descricao:"",valor:""}));
-    setShowAddMov(false);
+    setFMov(f=>({...f,descricao:"",valor:""})); setShowAddMov(false);
   };
-
   const ICONS_BANCO={nubank:"💜",inter:"🟠",bradesco:"🔴",itau:"🟡",santander:"🔴",caixa:"🔵",btg:"⚫",c6:"⚫",xp:"🟢"};
   const getIcon = nome=>ICONS_BANCO[(nome||"").toLowerCase()]||"🏦";
   const btnStyle={background:"var(--accent)",border:"none",color:"#fff",borderRadius:"var(--r2)",padding:"7px 16px",fontSize:13,fontWeight:600,cursor:"pointer"};
-
   return h("div",{style:{animation:"fadeUp .3s ease"}},
     h("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:24}},
       h(Stat,{label:"Patrimônio Líquido",value:fmt(totalSaldo),sub:"soma de todas as contas",accent:"blue",icon:"💎",big:true}),
@@ -275,10 +320,8 @@ function SaldoTab({gastosMes,parcelasMes,rateioMes,comprasMes,fMes,fAno,saldos,o
             h(FF,{label:"Nome da Conta"},h(Input,{value:fConta.nome,onChange:e=>setFConta(f=>({...f,nome:e.target.value})),placeholder:"Ex: Nubank"})),
             h(FF,{label:"Banco"},h(Input,{value:fConta.banco,onChange:e=>setFConta(f=>({...f,banco:e.target.value})),placeholder:"Ex: Nubank"})),
             h(FF,{label:"Tipo"},h(Sel,{value:fConta.tipo,onChange:e=>setFConta(f=>({...f,tipo:e.target.value}))},
-              h("option",{value:"corrente"},"Conta Corrente"),
-              h("option",{value:"poupanca"},"Poupança"),
-              h("option",{value:"investimento"},"Investimento"),
-              h("option",{value:"carteira"},"Carteira/Cash")
+              h("option",{value:"corrente"},"Conta Corrente"),h("option",{value:"poupanca"},"Poupança"),
+              h("option",{value:"investimento"},"Investimento"),h("option",{value:"carteira"},"Carteira/Cash")
             )),
             h(FF,{label:"Saldo Inicial R$"},h(Input,{type:"number",value:fConta.saldoInicial,onChange:e=>setFConta(f=>({...f,saldoInicial:e.target.value})),placeholder:"0,00",min:"0",step:"0.01"}))
           ),
@@ -287,56 +330,52 @@ function SaldoTab({gastosMes,parcelasMes,rateioMes,comprasMes,fMes,fAno,saldos,o
         showAddMov&&h("div",{style:{background:"var(--bg1)",borderRadius:"var(--r2)",padding:16,marginBottom:16,border:"1px solid var(--border)"}},
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}},
             h(FF,{label:"Conta"},h(Sel,{value:fMov.contaId,onChange:e=>setFMov(f=>({...f,contaId:e.target.value}))},
-              h("option",{value:""},"Selecione…"),
-              saldos.map(s=>h("option",{key:s.id,value:s.id},s.nome))
+              h("option",{value:""},"Selecione…"),saldos.map(s=>h("option",{key:s.id,value:s.id},s.nome))
             )),
             h(FF,{label:"Tipo"},h(Sel,{value:fMov.tipo,onChange:e=>setFMov(f=>({...f,tipo:e.target.value}))},
-              h("option",{value:"entrada"},"Entrada 📈"),
-              h("option",{value:"saida"},"Saída 📉")
+              h("option",{value:"entrada"},"Entrada 📈"),h("option",{value:"saida"},"Saída 📉")
             )),
             h(FF,{label:"Descrição"},h(Input,{value:fMov.descricao,onChange:e=>setFMov(f=>({...f,descricao:e.target.value})),placeholder:"Ex: Salário"})),
             h(FF,{label:"Valor R$"},h(Input,{type:"number",value:fMov.valor,onChange:e=>setFMov(f=>({...f,valor:e.target.value})),min:"0",step:"0.01",placeholder:"0,00"})),
             h(FF,{label:"Data"},h(Input,{type:"date",value:fMov.data,onChange:e=>setFMov(f=>({...f,data:e.target.value}))}))
           ),
-          h("button",{onClick:addMov,style:{...btnStyle,background:"var(--green)18",border:"1px solid rgba(52,211,153,.4)",color:"var(--green)"}},"Registrar Lançamento")
+          h("button",{onClick:addMov,style:{...btnStyle,background:"rgba(52,211,153,.15)",border:"1px solid rgba(52,211,153,.4)",color:"var(--green)"}},"Registrar Lançamento")
         ),
-        saldos.length===0
-          ? h(Empty,{msg:"Nenhuma conta cadastrada"})
-          : h("div",{style:{display:"flex",flexDirection:"column",gap:10}},
-            saldos.map(c=>h("div",{key:c.id,style:{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"var(--bg1)",borderRadius:"var(--r2)",border:"1px solid var(--border)"}},
-              h("div",{style:{fontSize:22}},getIcon(c.banco||c.nome)),
-              h("div",{style:{flex:1}},
-                h("div",{style:{fontSize:13,fontWeight:600,color:"var(--text)"}},c.nome),
-                h("div",{style:{fontSize:11,color:"var(--muted)"}},`${c.tipo} • ${c.banco||"—"}`)
-              ),
-              h("div",{style:{textAlign:"right"}},
-                h("div",{style:{fontSize:15,fontWeight:800,color:Number(c.saldoAtual)>=0?"var(--green)":"var(--red)",fontFamily:"var(--font-mono)"}},fmt(c.saldoAtual)),
-                h("div",{style:{fontSize:10,color:"var(--muted)"}},`inicial: ${fmt(c.saldoInicial)}`)
-              ),
-              h(DelBtn,{onClick:()=>onDelSaldo(c.id)})
-            ))
-          )
+        saldos.length===0?h(Empty,{msg:"Nenhuma conta cadastrada"}):
+        h("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+          saldos.map(c=>h("div",{key:c.id,style:{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"var(--bg1)",borderRadius:"var(--r2)",border:"1px solid var(--border)"}},
+            h("div",{style:{fontSize:22}},getIcon(c.banco||c.nome)),
+            h("div",{style:{flex:1}},
+              h("div",{style:{fontSize:13,fontWeight:600,color:"var(--text)"}},c.nome),
+              h("div",{style:{fontSize:11,color:"var(--muted)"}},`${c.tipo} • ${c.banco||"—"}`)
+            ),
+            h("div",{style:{textAlign:"right"}},
+              h("div",{style:{fontSize:15,fontWeight:800,color:Number(c.saldoAtual)>=0?"var(--green)":"var(--red)",fontFamily:"var(--font-mono)"}},fmt(c.saldoAtual)),
+              h("div",{style:{fontSize:10,color:"var(--muted)"}},`inicial: ${fmt(c.saldoInicial)}`)
+            ),
+            h(DelBtn,{onClick:()=>onDelSaldo(c.id)})
+          ))
+        )
       ),
       h(Card,null,
         h(SH,{title:"Últimas Movimentações"}),
-        movimentos.length===0
-          ? h(Empty,{msg:"Nenhuma movimentação registrada"})
-          : h("div",{style:{display:"flex",flexDirection:"column",gap:8}},
-            [...movimentos].reverse().slice(0,10).map(m=>{
-              const conta = saldos.find(s=>s.id===m.contaId);
-              return h("div",{key:m.id,style:{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:"var(--bg1)",borderRadius:"var(--r2)",border:"1px solid var(--border)"}},
-                h("div",{style:{fontSize:16}},m.tipo==="entrada"?"📈":"📉"),
-                h("div",{style:{flex:1}},
-                  h("div",{style:{fontSize:12,fontWeight:500,color:"var(--text)"}},m.descricao),
-                  h("div",{style:{fontSize:10.5,color:"var(--muted)"}},`${conta?.nome||"—"} • ${m.data.split("-").reverse().join("/")}`)
-                ),
-                h("div",{style:{fontWeight:700,fontSize:13,fontFamily:"var(--font-mono)",color:m.tipo==="entrada"?"var(--green)":"var(--red)"}},
-                  (m.tipo==="entrada"?"+":"−")+fmt(m.valor)
-                ),
-                h(DelBtn,{onClick:()=>onDelMov(m.id,m.contaId,m.tipo,m.valor)})
-              );
-            })
-          )
+        movimentos.length===0?h(Empty,{msg:"Nenhuma movimentação registrada"}):
+        h("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+          [...movimentos].reverse().slice(0,10).map(m=>{
+            const conta=saldos.find(s=>s.id===m.contaId);
+            return h("div",{key:m.id,style:{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:"var(--bg1)",borderRadius:"var(--r2)",border:"1px solid var(--border)"}},
+              h("div",{style:{fontSize:16}},m.tipo==="entrada"?"📈":"📉"),
+              h("div",{style:{flex:1}},
+                h("div",{style:{fontSize:12,fontWeight:500,color:"var(--text)"}},m.descricao),
+                h("div",{style:{fontSize:10.5,color:"var(--muted)"}},`${conta?.nome||"—"} • ${m.data.split("-").reverse().join("/")}`)
+              ),
+              h("div",{style:{fontWeight:700,fontSize:13,fontFamily:"var(--font-mono)",color:m.tipo==="entrada"?"var(--green)":"var(--red)"}},
+                (m.tipo==="entrada"?"+":"−")+fmt(m.valor)
+              ),
+              h(DelBtn,{onClick:()=>onDelMov(m.id,m.contaId,m.tipo,m.valor)})
+            );
+          })
+        )
       )
     )
   );
@@ -346,10 +385,10 @@ function SaldoTab({gastosMes,parcelasMes,rateioMes,comprasMes,fMes,fAno,saldos,o
 function OverviewTab({totalGasto,aReceber,aPagar,recebida,catData}){
   return h("div",{style:{animation:"fadeUp .3s ease"}},
     h("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:24}},
-      h(Stat,{label:"Total Gasto",   value:fmt(totalGasto), sub:"pessoal + apê + parcelado", accent:"red",   icon:"💸"}),
-      h(Stat,{label:"A Receber",     value:fmt(aReceber),   sub:"amigos + rateio pendentes", accent:"green", icon:"💰"}),
-      h(Stat,{label:"A Pagar",       value:fmt(aPagar),     sub:"contas do apê pendentes",  accent:"amber", icon:"⚠️"}),
-      h(Stat,{label:"Já Recebi",     value:fmt(recebida),   sub:"entrou no seu bolso",       accent:"purple",icon:"✅"}),
+      h(Stat,{label:"Total Gasto",  value:fmt(totalGasto),sub:"pessoal + apê + parcelado", accent:"red",   icon:"💸"}),
+      h(Stat,{label:"A Receber",    value:fmt(aReceber),  sub:"amigos + rateio pendentes", accent:"green", icon:"💰"}),
+      h(Stat,{label:"A Pagar",      value:fmt(aPagar),    sub:"contas do apê pendentes",   accent:"amber", icon:"⚠️"}),
+      h(Stat,{label:"Já Recebi",    value:fmt(recebida),  sub:"entrou no seu bolso",       accent:"purple",icon:"✅"}),
     ),
     h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}},
       h(Card,null,
@@ -365,17 +404,16 @@ function OverviewTab({totalGasto,aReceber,aPagar,recebida,catData}){
 }
 
 /* ════════════ ABA 2 — MEUS GASTOS ════════════ */
-function GastosTab({gastosMes,comprasMes,fMes,fAno,onAddGasto,onDelGasto,onAddCompra,onDelCompra,totalGastos,totalCompras}){
+function GastosTab({gastosMes,comprasMes,fMes,onAddGasto,onDelGasto,onAddCompra,onDelCompra,totalGastos,totalCompras}){
   const [form,setForm] = useState({data:D(CY,CM,Math.min(NOW.getDate(),28)),descricao:"",valor:"",categoria:"Cafeterias",parcelado:false,parcelas:2,dataInicio:D(CY,CM,1)});
   const [busy,setBusy] = useState(false);
   const upd = k=>e=>setForm(f=>({...f,[k]:e.target.value}));
-
   const submit = async()=>{
     if(!form.descricao.trim()||!form.valor) return;
     setBusy(true);
     try{
       if(form.parcelado&&form.parcelas>1){
-        const d = pdate(form.dataInicio);
+        const d=pdate(form.dataInicio);
         await onAddCompra({descricao:form.descricao,valorTotal:parseFloat(form.valor)*form.parcelas,parcelas:Number(form.parcelas),categoria:form.categoria,anoInicio:d.year,mesInicio:d.month});
       } else {
         await onAddGasto({data:form.data,descricao:form.descricao,valor:parseFloat(form.valor),categoria:form.categoria});
@@ -383,12 +421,11 @@ function GastosTab({gastosMes,comprasMes,fMes,fAno,onAddGasto,onDelGasto,onAddCo
       setForm(f=>({...f,descricao:"",valor:""}));
     }finally{setBusy(false);}
   };
-
   return h("div",{style:{animation:"fadeUp .3s ease"}},
     h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:24}},
-      h(Stat,{label:"Total do Mês",      value:fmt(totalGastos+totalCompras), sub:"gastos + parcelas",              accent:"red",   icon:"💸"}),
-      h(Stat,{label:"Gastos Diretos",    value:fmt(totalGastos),              sub:`${gastosMes.length} lançamentos`, accent:"amber", icon:"🧾"}),
-      h(Stat,{label:"Compras Parceladas",value:fmt(totalCompras),             sub:`${comprasMes.length} parc. este mês`,accent:"purple",icon:"💳"}),
+      h(Stat,{label:"Total do Mês",      value:fmt(totalGastos+totalCompras),sub:"gastos + parcelas",              accent:"red",   icon:"💸"}),
+      h(Stat,{label:"Gastos Diretos",    value:fmt(totalGastos),             sub:`${gastosMes.length} lançamentos`, accent:"amber", icon:"🧾"}),
+      h(Stat,{label:"Compras Parceladas",value:fmt(totalCompras),            sub:`${comprasMes.length} parc. este mês`,accent:"purple",icon:"💳"}),
     ),
     h(Card,{style:{marginBottom:20}},
       h("div",{style:{fontSize:11,fontWeight:700,color:"var(--accent)",marginBottom:16,textTransform:"uppercase",letterSpacing:".7px",fontFamily:"var(--font-head)"}},"Novo Lançamento"),
@@ -448,26 +485,20 @@ function GastosTab({gastosMes,comprasMes,fMes,fAno,onAddGasto,onDelGasto,onAddCo
 function CartaoTab({cartoes,parcelasMes,fMes,fAno,onToggle,onAdd,onDel}){
   const [show,setShow] = useState(false);
   const [form,setForm] = useState({amigo:"",descricao:"",valor:"",parcelado:false,parcelas:2,dataInicio:D(CY,CM,1)});
-  const upd = k=>e=>setForm(f=>({...f,[k]:e.target.value}));
-
-  const submit = async()=>{
+  const upd=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
+  const submit=async()=>{
     if(!form.amigo.trim()||!form.descricao.trim()||!form.valor) return;
-    const d = pdate(form.dataInicio);
-    const nparcelas = form.parcelado?Number(form.parcelas):1;
-    const vlr = parseFloat(form.valor);
-    await onAdd({amigo:form.amigo,descricao:form.descricao,valorTotal:form.parcelado?vlr*nparcelas:vlr,parcelas:nparcelas,anoInicio:d.year,mesInicio:d.month,pagamentos:{}});
-    setForm({amigo:"",descricao:"",valor:"",parcelado:false,parcelas:2,dataInicio:D(CY,CM,1)});
-    setShow(false);
+    const d=pdate(form.dataInicio), np=form.parcelado?Number(form.parcelas):1, vlr=parseFloat(form.valor);
+    await onAdd({amigo:form.amigo,descricao:form.descricao,valorTotal:form.parcelado?vlr*np:vlr,parcelas:np,anoInicio:d.year,mesInicio:d.month,pagamentos:{}});
+    setForm({amigo:"",descricao:"",valor:"",parcelado:false,parcelas:2,dataInicio:D(CY,CM,1)}); setShow(false);
   };
-
-  const pago = parcelasMes.filter(p=>p.pago).reduce((s,p)=>s+Number(p.valorParcela||0),0);
-  const pend = parcelasMes.filter(p=>!p.pago).reduce((s,p)=>s+Number(p.valorParcela||0),0);
-
+  const pago=parcelasMes.filter(p=>p.pago).reduce((s,p)=>s+Number(p.valorParcela||0),0);
+  const pend=parcelasMes.filter(p=>!p.pago).reduce((s,p)=>s+Number(p.valorParcela||0),0);
   return h("div",{style:{animation:"fadeUp .3s ease"}},
     h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:24}},
-      h(Stat,{label:"Total da Fatura", value:fmt(pago+pend),  sub:`${parcelasMes.length} item(s)`, accent:"blue",  icon:"💳"}),
-      h(Stat,{label:"Já Recebido",     value:fmt(pago),       sub:"amigos que pagaram",             accent:"green", icon:"✅"}),
-      h(Stat,{label:"Pendente",        value:fmt(pend),       sub:"aguardando pagamento",           accent:"amber", icon:"⏳"}),
+      h(Stat,{label:"Total da Fatura",value:fmt(pago+pend), sub:`${parcelasMes.length} item(s)`,accent:"blue",  icon:"💳"}),
+      h(Stat,{label:"Já Recebido",    value:fmt(pago),      sub:"amigos que pagaram",           accent:"green", icon:"✅"}),
+      h(Stat,{label:"Pendente",       value:fmt(pend),      sub:"aguardando pagamento",         accent:"amber", icon:"⏳"}),
     ),
     h(Card,{style:{marginBottom:20}},
       h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:show?16:0}},
@@ -495,22 +526,21 @@ function CartaoTab({cartoes,parcelasMes,fMes,fAno,onToggle,onAdd,onDel}){
         )
       )
     ),
-    parcelasMes.length===0
-      ? h(Empty,{msg:`Nenhuma cobrança em ${MESES[fMes]}/${fAno}`})
-      : h(Card,null,
-        h("table",null,
-          h("thead",null,h("tr",null,["Amigo","Produto","Parcela","Valor","Total","Status",""].map(c=>h("th",{key:c},c)))),
-          h("tbody",null,parcelasMes.map(p=>h("tr",{key:p.id+p.numParcela,className:"fade-up"},
-            h("td",{style:{color:"var(--purple)",fontWeight:700,fontFamily:"var(--font-head)"}},p.amigo),
-            h("td",{style:{color:"var(--text)",fontWeight:500}},p.descricao),
-            h("td",{style:{color:"var(--muted)",fontSize:12,fontFamily:"var(--font-mono)"}},p.parcelas>1?`${p.numParcela}/${p.parcelas}`:"À vista"),
-            h("td",{style:{fontFamily:"var(--font-mono)",color:p.pago?"var(--green)":"var(--amber)",fontWeight:700}},fmt(p.valorParcela)),
-            h("td",{style:{color:"var(--muted)",fontSize:12}},fmt(p.valorTotal)),
-            h("td",null,h(StatusBtn,{pago:p.pago,onClick:()=>onToggle(p.id,p.numParcela,p.pago)})),
-            h("td",null,h(DelBtn,{onClick:()=>onDel(p.id)}))
-          )))
-        )
+    parcelasMes.length===0?h(Empty,{msg:`Nenhuma cobrança em ${MESES[fMes]}/${fAno}`}):
+    h(Card,null,
+      h("table",null,
+        h("thead",null,h("tr",null,["Amigo","Produto","Parcela","Valor","Total","Status",""].map(c=>h("th",{key:c},c)))),
+        h("tbody",null,parcelasMes.map(p=>h("tr",{key:p.id+p.numParcela,className:"fade-up"},
+          h("td",{style:{color:"var(--purple)",fontWeight:700,fontFamily:"var(--font-head)"}},p.amigo),
+          h("td",{style:{color:"var(--text)",fontWeight:500}},p.descricao),
+          h("td",{style:{color:"var(--muted)",fontSize:12,fontFamily:"var(--font-mono)"}},p.parcelas>1?`${p.numParcela}/${p.parcelas}`:"À vista"),
+          h("td",{style:{fontFamily:"var(--font-mono)",color:p.pago?"var(--green)":"var(--amber)",fontWeight:700}},fmt(p.valorParcela)),
+          h("td",{style:{color:"var(--muted)",fontSize:12}},fmt(p.valorTotal)),
+          h("td",null,h(StatusBtn,{pago:p.pago,onClick:()=>onToggle(p.id,p.numParcela,p.pago)})),
+          h("td",null,h(DelBtn,{onClick:()=>onDel(p.id)}))
+        )))
       )
+    )
   );
 }
 
@@ -518,30 +548,27 @@ function CartaoTab({cartoes,parcelasMes,fMes,fAno,onToggle,onAdd,onDel}){
 function RateioTab({rateioMes,fMes,fAno,onToggle,onAdd,onDel,aReceber,aPagar,gastoMeu}){
   const [show,setShow] = useState(false);
   const [form,setForm] = useState({descricao:"",valorTotal:"",titular:"eu",parcelado:false,parcelas:2,dataInicio:D(CY,CM,1)});
-  const upd = k=>e=>setForm(f=>({...f,[k]:e.target.value}));
-
-  const submit = async()=>{
+  const upd=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
+  const submit=async()=>{
     if(!form.descricao.trim()||!form.valorTotal) return;
-    const d = pdate(form.dataInicio);
-    const base = {descricao:form.descricao,titular:form.titular,status:"pendente"};
+    const d=pdate(form.dataInicio);
+    const base={descricao:form.descricao,titular:form.titular,status:"pendente"};
     if(form.parcelado&&form.parcelas>1){
-      const vlrParc = parseFloat(form.valorTotal);
+      const vlr=parseFloat(form.valorTotal);
       for(let i=0;i<form.parcelas;i++){
-        const month = (d.month+i)%12, year = d.year+Math.floor((d.month+i)/12);
-        await onAdd({...base,valorTotal:vlrParc*2,mes:month,ano:year});
+        const month=(d.month+i)%12, year=d.year+Math.floor((d.month+i)/12);
+        await onAdd({...base,valorTotal:vlr*2,mes:month,ano:year});
       }
     } else {
       await onAdd({...base,valorTotal:parseFloat(form.valorTotal)*2,mes:fMes,ano:fAno});
     }
-    setForm({descricao:"",valorTotal:"",titular:"eu",parcelado:false,parcelas:2,dataInicio:D(CY,CM,1)});
-    setShow(false);
+    setForm({descricao:"",valorTotal:"",titular:"eu",parcelado:false,parcelas:2,dataInicio:D(CY,CM,1)}); setShow(false);
   };
-
   return h("div",{style:{animation:"fadeUp .3s ease"}},
     h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:24}},
-      h(Stat,{label:"A Receber do Colega",value:fmt(aReceber),sub:"contas no seu nome",  accent:"green", icon:"📥"}),
-      h(Stat,{label:"Ainda Devo Pagar",   value:fmt(aPagar),  sub:"contas do colega",    accent:"amber", icon:"📤"}),
-      h(Stat,{label:"Já Paguei",          value:fmt(gastoMeu),sub:"minha parte quitada", accent:"blue",  icon:"✅"}),
+      h(Stat,{label:"A Receber do Colega",value:fmt(aReceber),sub:"contas no seu nome", accent:"green",icon:"📥"}),
+      h(Stat,{label:"Ainda Devo Pagar",   value:fmt(aPagar),  sub:"contas do colega",  accent:"amber",icon:"📤"}),
+      h(Stat,{label:"Já Paguei",          value:fmt(gastoMeu),sub:"minha parte quitada",accent:"blue", icon:"✅"}),
     ),
     h(Card,{style:{marginBottom:20}},
       h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:show?16:0}},
@@ -571,53 +598,36 @@ function RateioTab({rateioMes,fMes,fAno,onToggle,onAdd,onDel,aReceber,aPagar,gas
         )
       )
     ),
-    rateioMes.length===0
-      ? h(Empty,{msg:`Nenhuma conta em ${MESES[fMes]}/${fAno}`})
-      : h(Card,null,
-        h("table",null,
-          h("thead",null,h("tr",null,["Descrição","Total","Minha Parte","Titular","Situação","Status",""].map(c=>h("th",{key:c},c)))),
-          h("tbody",null,rateioMes.map(r=>{
-            const mp=r.valorTotal/2, meu=r.titular==="eu", pg=r.status==="pago";
-            const sit=meu?(pg?"✅ Colega pagou":"⏳ Aguardando"):(pg?"✅ Você pagou":"❗ Pagar");
-            const sitC=pg?"var(--green)":(meu?"var(--amber)":"var(--red)");
-            return h("tr",{key:r.id,className:"fade-up"},
-              h("td",{style:{color:"var(--text)",fontWeight:500}},r.descricao),
-              h("td",{style:{color:"var(--muted)",fontFamily:"var(--font-mono)"}},fmt(r.valorTotal)),
-              h("td",{style:{fontFamily:"var(--font-mono)",color:"var(--purple)",fontWeight:700}},fmt(mp)),
-              h("td",null,h("span",{style:{background:meu?"rgba(79,142,255,.12)":"rgba(34,211,238,.12)",color:meu?"var(--accent)":"var(--cyan)",borderRadius:5,padding:"2px 8px",fontSize:11,fontWeight:700}},meu?"Eu":"Colega")),
-              h("td",{style:{fontSize:12,color:sitC,fontWeight:600}},sit),
-              h("td",null,h(StatusBtn,{pago:pg,onClick:()=>onToggle(r.id)})),
-              h("td",null,h(DelBtn,{onClick:()=>onDel(r.id)}))
-            );
-          }))
-        )
+    rateioMes.length===0?h(Empty,{msg:`Nenhuma conta em ${MESES[fMes]}/${fAno}`}):
+    h(Card,null,
+      h("table",null,
+        h("thead",null,h("tr",null,["Descrição","Total","Minha Parte","Titular","Situação","Status",""].map(c=>h("th",{key:c},c)))),
+        h("tbody",null,rateioMes.map(r=>{
+          const mp=r.valorTotal/2, meu=r.titular==="eu", pg=r.status==="pago";
+          const sit=meu?(pg?"✅ Colega pagou":"⏳ Aguardando"):(pg?"✅ Você pagou":"❗ Pagar");
+          const sitC=pg?"var(--green)":(meu?"var(--amber)":"var(--red)");
+          return h("tr",{key:r.id,className:"fade-up"},
+            h("td",{style:{color:"var(--text)",fontWeight:500}},r.descricao),
+            h("td",{style:{color:"var(--muted)",fontFamily:"var(--font-mono)"}},fmt(r.valorTotal)),
+            h("td",{style:{fontFamily:"var(--font-mono)",color:"var(--purple)",fontWeight:700}},fmt(mp)),
+            h("td",null,h("span",{style:{background:meu?"rgba(79,142,255,.12)":"rgba(34,211,238,.12)",color:meu?"var(--accent)":"var(--cyan)",borderRadius:5,padding:"2px 8px",fontSize:11,fontWeight:700}},meu?"Eu":"Colega")),
+            h("td",{style:{fontSize:12,color:sitC,fontWeight:600}},sit),
+            h("td",null,h(StatusBtn,{pago:pg,onClick:()=>onToggle(r.id)})),
+            h("td",null,h(DelBtn,{onClick:()=>onDel(r.id)}))
+          );
+        }))
       )
+    )
   );
 }
 
-/* ════════════ TELA DE ERRO ════════════ */
-function ErrorScreen({msg,onRetry}){
-  return h("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",flexDirection:"column",gap:16,padding:32,textAlign:"center"}},
-    h("div",{style:{fontSize:40}},"🔥"),
-    h("div",{style:{fontSize:18,fontWeight:700,color:"var(--red)",fontFamily:"var(--font-head)"}},"Erro ao conectar"),
-    h("div",{style:{fontSize:13,color:"var(--muted)",maxWidth:480,lineHeight:1.7}},msg),
-    h("div",{style:{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:"var(--r)",padding:"16px 20px",marginTop:8,fontSize:12,fontFamily:"var(--font-mono)",color:"var(--muted2)",textAlign:"left",maxWidth:560}},
-      h("div",{style:{color:"var(--amber)",marginBottom:8,fontWeight:600}},"💡 Para resolver — ative as regras do Firestore:"),
-      h("div",null,"No Firebase Console → Firestore → Regras, cole:"),
-      h("pre",{style:{marginTop:8,color:"var(--cyan)"}},"rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /{doc=**} {\n      allow read, write: if request.auth != null;\n    }\n  }\n}")
-    ),
-    h("button",{onClick:onRetry,style:{marginTop:8,background:"var(--accent)",border:"none",color:"#fff",borderRadius:"var(--r2)",padding:"10px 24px",fontSize:14,fontWeight:700,cursor:"pointer"}},"Tentar novamente")
-  );
-}
-
-/* ════════════ APP PRINCIPAL ════════════ */
+/* ════════════ APP ════════════ */
 function App(){
   const [tab,setTab]   = useState("saldo");
   const [fMes,setFMes] = useState(CM);
   const [fAno,setFAno] = useState(CY);
   const [ready,setReady] = useState(false);
   const [error,setError] = useState(null);
-
   const [gastos,  setGastos]  = useState([]);
   const [cartoes, setCartoes] = useState([]);
   const [rateio,  setRateio]  = useState([]);
@@ -628,47 +638,43 @@ function App(){
   const loadData = useCallback(async()=>{
     setError(null);
     try{
+      setStatus("lendo coleções…");
       const [g,c,r,cp,s,m] = await Promise.all([
-        getAll("gastos"), getAll("cartoes"), getAll("rateio"),
-        getAll("compras_proprias"), getAll("saldos"), getAll("movimentos")
+        getAll("gastos"),getAll("cartoes"),getAll("rateio"),
+        getAll("compras_proprias"),getAll("saldos"),getAll("movimentos")
       ]);
-      setGastos(g); setCartoes(c); setRateio(r); setCompras(cp); setSaldos(s); setMovs(m);
+      setGastos(g);setCartoes(c);setRateio(r);setCompras(cp);setSaldos(s);setMovs(m);
       showToast("✓ Dados carregados","success");
       setReady(true);
     }catch(e){
-      console.error("Firestore error:",e);
-      setError(e.message||"Falha ao acessar o Firestore. Verifique as regras de segurança.");
+      console.error("Firestore:",e);
+      setError(e.message||"Falha ao acessar Firestore.");
     }
   },[]);
 
   useEffect(()=>{
+    setStatus("autenticando…");
     const unsub = onAuthStateChanged(auth, async user=>{
       if(user){
         await loadData();
       } else {
-        try{
-          await signInAnonymously(auth);
-        }catch(e){
-          setError("Falha na autenticação anônima: "+e.message);
-        }
+        try{ await signInAnonymously(auth); }
+        catch(e){ setError("Auth anônima falhou: "+e.message); }
       }
     });
     return ()=>unsub();
   },[]);
 
-  /* ── Derived ── */
   const gastosMes = useMemo(()=>gastos.filter(g=>{const{year,month}=pdate(g.data);return year===fAno&&month===fMes}),[gastos,fMes,fAno]);
   const totalGastosPessoais = useMemo(()=>gastosMes.reduce((s,g)=>s+Number(g.valor||0),0),[gastosMes]);
-
   const parcelasMes = useMemo(()=>{
     const r=[];
     cartoes.forEach(c=>{
-      const diff=(fAno-c.anoInicio)*12+(fMes-c.mesInicio), num=diff+1;
+      const diff=(fAno-c.anoInicio)*12+(fMes-c.mesInicio),num=diff+1;
       if(num>=1&&num<=c.parcelas) r.push({...c,numParcela:num,valorParcela:c.valorTotal/c.parcelas,pago:((c.pagamentos||{})[num])===true});
     });
     return r;
   },[cartoes,fMes,fAno]);
-
   const comprasMes = useMemo(()=>{
     const r=[];
     compras.forEach(c=>{
@@ -677,19 +683,16 @@ function App(){
     });
     return r;
   },[compras,fMes,fAno]);
-
   const rateioMes = useMemo(()=>rateio.filter(r=>r.mes===fMes&&r.ano===fAno),[rateio,fMes,fAno]);
   const aReceber  = useMemo(()=>rateioMes.filter(r=>r.titular==="eu"    &&r.status==="pendente").reduce((s,r)=>s+r.valorTotal/2,0),[rateioMes]);
   const aPagar    = useMemo(()=>rateioMes.filter(r=>r.titular==="colega"&&r.status==="pendente").reduce((s,r)=>s+r.valorTotal/2,0),[rateioMes]);
   const gastoMeu  = useMemo(()=>rateioMes.filter(r=>r.titular==="colega"&&r.status==="pago"   ).reduce((s,r)=>s+r.valorTotal/2,0),[rateioMes]);
-
   const totalParcelasPagas = useMemo(()=>parcelasMes.filter(p=>p.pago).reduce((s,p)=>s+p.valorParcela,0),[parcelasMes]);
   const totalParcelasPend  = useMemo(()=>parcelasMes.filter(p=>!p.pago).reduce((s,p)=>s+p.valorParcela,0),[parcelasMes]);
   const totalComprasMes    = useMemo(()=>comprasMes.reduce((s,p)=>s+p.valorParcela,0),[comprasMes]);
-  const totalGasto   = totalGastosPessoais+totalParcelasPagas+gastoMeu+totalComprasMes;
-  const aReceberTot  = aReceber+totalParcelasPend;
-  const recebida     = rateioMes.filter(r=>r.titular==="eu"&&r.status==="pago").reduce((s,r)=>s+r.valorTotal/2,0)+totalParcelasPagas;
-
+  const totalGasto  = totalGastosPessoais+totalParcelasPagas+gastoMeu+totalComprasMes;
+  const aReceberTot = aReceber+totalParcelasPend;
+  const recebida    = rateioMes.filter(r=>r.titular==="eu"&&r.status==="pago").reduce((s,r)=>s+r.valorTotal/2,0)+totalParcelasPagas;
   const catData = useMemo(()=>{
     const m={};
     gastosMes.forEach(g=>{m[g.categoria]=(m[g.categoria]||0)+Number(g.valor||0);});
@@ -697,19 +700,18 @@ function App(){
     return Object.entries(m).map(([cat,val])=>({cat,val})).sort((a,b)=>b.val-a.val);
   },[gastosMes,comprasMes]);
 
-  /* ── Actions ── */
-  const addGasto   = useCallback(async g=>{const r=await fadd("gastos",g);setGastos(p=>[...p,{...g,id:r.id}]);showToast("✓ Gasto adicionado","success");},[]);
-  const delGasto   = useCallback(async id=>{await fdel("gastos",id);setGastos(p=>p.filter(g=>g.id!==id));showToast("Gasto removido");},[]);
-  const addCompra  = useCallback(async c=>{const r=await fadd("compras_proprias",c);setCompras(p=>[...p,{...c,id:r.id}]);showToast("✓ Compra parcelada cadastrada","success");},[]);
-  const delCompra  = useCallback(async id=>{await fdel("compras_proprias",id);setCompras(p=>p.filter(c=>c.id!==id));showToast("Compra removida");},[]);
-  const addCartao  = useCallback(async c=>{const r=await fadd("cartoes",c);setCartoes(p=>[...p,{...c,id:r.id}]);showToast("✓ Empréstimo adicionado","success");},[]);
-  const delCartao  = useCallback(async id=>{await fdel("cartoes",id);setCartoes(p=>p.filter(c=>c.id!==id));},[]);
+  const addGasto  = useCallback(async g=>{const r=await fadd("gastos",g);setGastos(p=>[...p,{...g,id:r.id}]);showToast("✓ Gasto adicionado","success");},[]);
+  const delGasto  = useCallback(async id=>{await fdel("gastos",id);setGastos(p=>p.filter(g=>g.id!==id));showToast("Gasto removido");},[]);
+  const addCompra = useCallback(async c=>{const r=await fadd("compras_proprias",c);setCompras(p=>[...p,{...c,id:r.id}]);showToast("✓ Compra parcelada cadastrada","success");},[]);
+  const delCompra = useCallback(async id=>{await fdel("compras_proprias",id);setCompras(p=>p.filter(c=>c.id!==id));showToast("Compra removida");},[]);
+  const addCartao = useCallback(async c=>{const r=await fadd("cartoes",c);setCartoes(p=>[...p,{...c,id:r.id}]);showToast("✓ Empréstimo adicionado","success");},[]);
+  const delCartao = useCallback(async id=>{await fdel("cartoes",id);setCartoes(p=>p.filter(c=>c.id!==id));},[]);
   const toggleParcela = useCallback(async(cId,num,pago)=>{
     const c=cartoes.find(x=>x.id===cId); if(!c)return;
     const np={...(c.pagamentos||{}),[num]:!pago};
     await fpatch("cartoes",cId,{pagamentos:np});
     setCartoes(p=>p.map(x=>x.id!==cId?x:{...x,pagamentos:np}));
-    showToast(!pago?"✓ Marcado como pago":"↩ Revertido para pendente",!pago?"success":"warn");
+    showToast(!pago?"✓ Marcado como pago":"↩ Revertido",!pago?"success":"warn");
   },[cartoes]);
   const addRateio    = useCallback(async r=>{const ref=await fadd("rateio",r);setRateio(p=>[...p,{...r,id:ref.id}]);showToast("✓ Conta adicionada","success");},[]);
   const delRateio    = useCallback(async id=>{await fdel("rateio",id);setRateio(p=>p.filter(r=>r.id!==id));},[]);
@@ -723,30 +725,39 @@ function App(){
   const addSaldo = useCallback(async s=>{const r=await fadd("saldos",s);setSaldos(p=>[...p,{...s,id:r.id}]);showToast("✓ Conta cadastrada","success");},[]);
   const delSaldo = useCallback(async id=>{await fdel("saldos",id);setSaldos(p=>p.filter(s=>s.id!==id));},[]);
   const addMov = useCallback(async m=>{
-    const r = await fadd("movimentos",m);
-    setMovs(p=>[...p,{...m,id:r.id}]);
-    const conta = saldos.find(s=>s.id===m.contaId);
-    if(!conta) return;
-    const delta = m.tipo==="entrada"?Number(m.valor):-Number(m.valor);
-    const novoSaldo = Number(conta.saldoAtual||0)+delta;
+    const r=await fadd("movimentos",m); setMovs(p=>[...p,{...m,id:r.id}]);
+    const conta=saldos.find(s=>s.id===m.contaId); if(!conta)return;
+    const delta=m.tipo==="entrada"?Number(m.valor):-Number(m.valor);
+    const novoSaldo=Number(conta.saldoAtual||0)+delta;
     await fpatch("saldos",m.contaId,{saldoAtual:novoSaldo});
     setSaldos(p=>p.map(s=>s.id===m.contaId?{...s,saldoAtual:novoSaldo}:s));
     showToast("✓ Lançamento registrado","success");
   },[saldos]);
   const delMov = useCallback(async(id,contaId,tipo,valor)=>{
-    await fdel("movimentos",id);
-    setMovs(p=>p.filter(m=>m.id!==id));
-    const conta = saldos.find(s=>s.id===contaId);
-    if(!conta) return;
-    const delta = tipo==="entrada"?-Number(valor):Number(valor);
-    const novoSaldo = Number(conta.saldoAtual||0)+delta;
+    await fdel("movimentos",id); setMovs(p=>p.filter(m=>m.id!==id));
+    const conta=saldos.find(s=>s.id===contaId); if(!conta)return;
+    const delta=tipo==="entrada"?-Number(valor):Number(valor);
+    const novoSaldo=Number(conta.saldoAtual||0)+delta;
     await fpatch("saldos",contaId,{saldoAtual:novoSaldo});
     setSaldos(p=>p.map(s=>s.id===contaId?{...s,saldoAtual:novoSaldo}:s));
     showToast("Lançamento removido");
   },[saldos]);
 
-  /* ── Loading / Error states ── */
-  if(error) return h(ErrorScreen,{msg:error,onRetry:loadData});
+  if(error) return h("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",flexDirection:"column",gap:16,padding:32,textAlign:"center"}},
+    h("div",{style:{fontSize:40}},"🔥"),
+    h("div",{style:{fontSize:18,fontWeight:700,color:"var(--red)",fontFamily:"var(--font-head)"}},"Erro ao conectar"),
+    h("div",{style:{fontSize:13,color:"var(--muted)",maxWidth:520,lineHeight:1.8}},error),
+    h("div",{style:{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:"var(--r)",padding:"16px 20px",fontSize:12,fontFamily:"var(--font-mono)",color:"var(--muted2)",textAlign:"left",maxWidth:560}},
+      h("div",{style:{color:"var(--amber)",marginBottom:8,fontWeight:600}},"💡 Verifique no Firebase Console:"),
+      h("div",{style:{lineHeight:1.9}},
+        "1. Authentication → Sign-in method → ativar Anônimo",h("br",null),
+        "2. Firestore → Regras → publicar:",h("br",null),
+        h("pre",{style:{marginTop:6,color:"var(--cyan)",fontSize:11}},"rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /{doc=**} {\n      allow read, write: if request.auth != null;\n    }\n  }\n}")
+      )
+    ),
+    h("button",{onClick:()=>window.location.reload(),style:{marginTop:8,background:"var(--accent)",border:"none",color:"#fff",borderRadius:"var(--r2)",padding:"10px 24px",fontSize:14,fontWeight:700,cursor:"pointer"}},"Tentar novamente")
+  );
+
   if(!ready) return h("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",flexDirection:"column",gap:16}},
     h("div",{className:"spinner"}),
     h("div",{style:{fontSize:14,color:"var(--muted)",fontFamily:"var(--font-head)"}},"Carregando dados…")
@@ -759,9 +770,7 @@ function App(){
     {id:"cartao",  emoji:"💳",label:"Cartão Emp."},
     {id:"rateio",  emoji:"🏠",label:"Rateio Apê"},
   ];
-
   return h("div",{style:{minHeight:"100vh",background:"var(--bg)"}},
-    /* HEADER */
     h("div",{style:{background:"linear-gradient(180deg,#0d1421,var(--bg1))",borderBottom:"1px solid var(--border)",padding:"16px 28px 0",position:"sticky",top:0,zIndex:100,backdropFilter:"blur(12px)"}},
       h("div",{style:{maxWidth:1100,margin:"0 auto"}},
         h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}},
@@ -791,27 +800,27 @@ function App(){
         )
       )
     ),
-    /* CONTENT */
     h("div",{style:{maxWidth:1100,margin:"0 auto",padding:"28px 28px 60px"}},
       tab==="saldo"   &&h(SaldoTab,{gastosMes,parcelasMes,rateioMes,comprasMes,fMes,fAno,saldos,onAddSaldo:addSaldo,onDelSaldo:delSaldo,onAddMov:addMov,onDelMov:delMov,movimentos:movs}),
       tab==="overview"&&h(OverviewTab,{totalGasto,aReceber:aReceberTot,aPagar,recebida,catData}),
-      tab==="gastos"  &&h(GastosTab,{gastosMes,comprasMes,fMes,fAno,onAddGasto:addGasto,onDelGasto:delGasto,onAddCompra:addCompra,onDelCompra:delCompra,totalGastos:totalGastosPessoais,totalCompras:totalComprasMes}),
+      tab==="gastos"  &&h(GastosTab,{gastosMes,comprasMes,fMes,onAddGasto:addGasto,onDelGasto:delGasto,onAddCompra:addCompra,onDelCompra:delCompra,totalGastos:totalGastosPessoais,totalCompras:totalComprasMes}),
       tab==="cartao"  &&h(CartaoTab,{cartoes,parcelasMes,fMes,fAno,onToggle:toggleParcela,onAdd:addCartao,onDel:delCartao}),
       tab==="rateio"  &&h(RateioTab,{rateioMes,fMes,fAno,onToggle:toggleRateio,onAdd:addRateio,onDel:delRateio,aReceber,aPagar,gastoMeu})
     )
   );
 }
 
-/* ══ BOOT — aguarda auth antes de montar o React ══ */
-let rootMounted = false;
-onAuthStateChanged(auth, async user=>{
-  if(rootMounted) return;
+/* ══ BOOT ══ */
+let mounted = false;
+onAuthStateChanged(auth, async user => {
+  if(mounted) return;
   if(!user){
-    try{ await signInAnonymously(auth); }catch(e){ console.error(e); }
+    try{ await signInAnonymously(auth); }
+    catch(e){ showFatalError("Autenticação anônima falhou.<br>" + e.message); }
     return;
   }
-  rootMounted = true;
-  RD.createRoot(document.getElementById("root")).render(R.default.createElement(App,null));
+  mounted = true;
+  RD.createRoot(document.getElementById("root")).render(R.default.createElement(App, null));
 });
 </script>
 </body>
